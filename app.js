@@ -64,7 +64,8 @@ const proxyServer = http.createServer((req, res) => {
   else {
     const url = req?.method && req?.url ? `${req.method} ${req.url}` : null
     log.error(createMsg(null, req?.headers?.host, req?.headers?.['x-forwarded-for'], 'missing redirect rule', url))
-    res.writeHead(444).end()
+    res.writeHead(444)
+    res.end()
   }
 })
 

@@ -20,6 +20,9 @@
     "type": "git",
     "url": "git+https://github.com/goodvir/foramina.git"
   },
+  "bugs": {
+    "url": "https://github.com/goodvir/foramina/issues"
+  },
   "homepage": "https://github.com/goodvir/foramina",
   "engines": {
     "node": ">=16"
