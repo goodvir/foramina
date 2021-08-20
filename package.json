@@ -1,0 +1,56 @@
+{
+  "name": "foramina",
+  "description": "Настраиваемый прокси сервер с интеграцией NGROK",
+  "main": "app.js",
+  "bin": "app.js",
+  "scripts": {
+    "dev": "nodemon app.js",
+    "start": "node app.js",
+    "build": "pkg package.json",
+    "updatePackages": "ncu -u"
+  },
+  "keywords": [
+    "ngrok",
+    "foramina",
+    "http-proxy"
+  ],
+  "author": "goodvir",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goodvir/foramina.git"
+  },
+  "homepage": "https://github.com/goodvir/foramina",
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1",
+    "ngrok": "^4.1.0",
+    "pkg": "^5.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.12",
+    "npm-check-updates": "^11.8.3",
+    "prettier": "2.3.2"
+  },
+  "nodemonConfig": {
+    "signal": "SIGKILL",
+    "ext": "js,json,md",
+    "watch": [
+      "config.json",
+      "app.js",
+      "package.json"
+    ]
+  },
+  "pkg": {
+    "assets": [
+      "node_modules/ngrok/bin/**/*"
+    ],
+    "targets": [
+      "linux",
+      "win"
+    ],
+    "outputPath": "dist"
+  }
+}
