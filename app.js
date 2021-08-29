@@ -14,7 +14,8 @@ process.on('uncaughtException', (err) => {
   else process.exit(1)
 })
 
-// Работа с файловой системой
+// Работа c системой
+const os = require('os')
 const fs = require('fs')
 const path = require('path')
 // TODO const {tmpdir} = require('os')
@@ -121,12 +122,15 @@ server.on('upgrade', (req, socket, head) => {
   } else socket.destroy()
 })
 
-// Запуск приложения
+// Инициализация
 ;(async () => {
+  const [host, port, urls] = getListening(config['host'], config['port'])
+
   // Формирование правил маршрутизации
   for (const route of config['routing']) {
     if (!route['active']) continue
-    routingRules[route['forward']] = {
+
+    const routingRule = {
       name: route['name'],
       proxy: Object.assign({}, config['proxy'] || {}, route['opts'] || {}),
       rules: new HttpProxyRules(typeof route['target'] === 'string' ? {default: route['target']} : route['target']),
@@ -137,14 +141,18 @@ server.on('upgrade', (req, socket, head) => {
       }
     }
 
+    // Привязка правил маршрутизации
+    if (route['forward'] === 'default') urls.forEach((url) => (routingRules[url.host] = routingRule))
+    else routingRules[route['forward']] = routingRule
+
     // Запуск туннеля NGROK
     if (route['tunnel'] === true || (route['tunnel'] && route?.['tunnel']?.['active'] !== false)) {
       try {
-        const addr = config['port'] || 3000
+        const addr = `${host}:${port}`
         const cfg = Object.assign({}, config['ngrok'] || {}, route?.['tunnel']?.['opts'] || {}, {addr})
-        const url = await ngrok['connect'](cfg)
-        routingRules[url.split('//')[1]] = routingRules[route['forward']]
-        log.info(`Created tunnel ${url} to ${route['name'] || ''} ${route['forward']}`)
+        const url = new URL(await ngrok['connect'](cfg))
+        routingRules[url.host] = routingRule
+        log.info(`Created tunnel ${route['name'] || '-'} ${url.href}`)
       } catch (e) {
         let details
         try {
@@ -156,9 +164,8 @@ server.on('upgrade', (req, socket, head) => {
   }
 
   // Запуск сервера
-  server.listen(config['port'] || 3000, config['host'] || '127.0.0.1')
-  // noinspection HttpUrlsUsage
-  log.info(`Server listening at http://${config['host'] || '127.0.0.1'}:${config['port'] || 3000}`)
+  server.listen(port, host)
+  urls.forEach((url) => log.info(`Server listening at ${url.href}`))
 })()
 
 /**
@@ -177,6 +184,11 @@ function getConfig() {
   return YAML.parse(fs.readFileSync(cfg, 'utf8'))
 }
 
+/**
+ * Формирование служебных данных маршрутизации
+ * @param req объект запроса
+ * @returns {object|null}
+ */
 function configureObj(req) {
   const host = req.headers?.host
   const url = req.url
@@ -184,14 +196,18 @@ function configureObj(req) {
   const opts = routingRule?.match(req)
   req.foramina = {
     $name: routingRule?.name,
-    $ip: req.headers?.['x-forwarded-for'] || req.socket?.remoteAddress,
+    $ip:
+      (req.headers?.['x-forwarded-for'] || '').split(',').pop() ||
+      req?.connection?.remoteAddress ||
+      req?.socket?.remoteAddress ||
+      req?.connection?.socket?.remoteAddress,
     $statusCode: null,
     $statusMessage: 'MISSING',
     $method: req.method,
     $forward: host ? new URL(url, `${req.headers?.['x-forwarded-proto'] || 'http'}://${host}`) : null,
     $target: opts?.target ? new URL(req.url, opts.target) : null
   }
-  return opts
+  return opts || null
 }
 
 /**
@@ -211,4 +227,40 @@ function format(obj) {
   str = str.replace('$target_href', obj.$target?.href || '-')
   str = str.replace('$target_pathname', obj.$target?.pathname || '-')
   return str
+}
+
+/**
+ * Формирование URL сервера
+ * @param host интерфейс, который будет прослушивать сервер
+ * @param port порт, который будет прослушивать сервер
+ * @returns {*[]}
+ */
+function getListening(host, port) {
+  const protocol = 'http'
+  host = config['host'] === 'localhost' ? '127.0.0.1' : config['host'] || '127.0.0.1'
+  port = config['port'] || 3000
+
+  const urls = []
+  switch (host) {
+    case '127.0.0.1':
+      urls.push(new URL(`${protocol}://localhost:${port}`))
+      urls.push(new URL(`${protocol}://127.0.0.1:${port}`))
+      break
+    case '0.0.0.0':
+      urls.push(new URL(`${protocol}://localhost:${port}`))
+      urls.push(new URL(`${protocol}://127.0.0.1:${port}`))
+      try {
+        Object.entries(os.networkInterfaces()).forEach(([, interfaces]) => {
+          interfaces.forEach((face) => {
+            if ('IPv4' !== face.family || face.internal !== false) return
+            urls.push(new URL(`${protocol}://${face.address}:${port}`))
+          })
+        })
+      } catch {}
+      break
+    default:
+      urls.push(new URL(`${protocol}://${host}:${port}`))
+  }
+
+  return [host, port, urls]
 }
