@@ -11,6 +11,7 @@ const readlineInterface = readline.createInterface({
 process.on('uncaughtException', (err) => {
   console.error(err)
   if (process['pkg']) readlineInterface.on('line', () => process.exit(1))
+  else process.exit(1)
 })
 
 // Работа с файловой системой
@@ -22,6 +23,7 @@ const path = require('path')
 const YAML = require('yaml')
 
 // Проксирование запросов
+const {URL} = require('url')
 const http = require('http')
 const httpProxy = require('http-proxy')
 const HttpProxyRules = require('http-proxy-rules')
@@ -34,7 +36,7 @@ const config = getConfig()
 
 // Настройка логирования
 const logs = {
-  format: '$name $ip $code $msg $method $host$url $target',
+  format: '$name $ip $statusCode $statusMessage $method $forward_href $target_href',
   file: false
 }
 if (typeof config['logs'] === 'string') logs.format = config['logs']
@@ -71,41 +73,27 @@ const log = {
 // Правила маршрутизации
 const routingRules = {}
 
+// Экземпляр сервера
+const server = http.createServer()
+
 // Экземпляр прокси
 const proxy = new httpProxy['createProxyServer']()
 
 // Логирование запросов прокси
 proxy.on('proxyRes', function (proxyRes, req) {
-  const obj = {
-    $name: routingRules[req?.headers?.host]?.name,
-    $ip: req?.headers?.['x-forwarded-for'],
-    $code: proxyRes?.statusCode,
-    $msg: proxyRes?.statusMessage,
-    $method: req?.method,
-    $host: req?.headers?.host,
-    $url: req?.url,
-    $target: routingRules[req?.headers?.host]?.match(req)?.['target']
-  }
-  const msg = format(obj)
-  if (obj.$code >= 500) log.error(msg)
-  else if (obj.$code >= 400) log.warn(msg)
-  else if (obj.$code >= 300) log.trace(msg)
+  req.foramina.$statusCode = proxyRes?.statusCode
+  req.foramina.$statusMessage = proxyRes?.statusMessage
+  const msg = format(req.foramina)
+  if (req.foramina.$statusCode >= 500) log.error(msg)
+  else if (req.foramina.$statusCode >= 400) log.warn(msg)
+  else if (req.foramina.$statusCode >= 300) log.trace(msg)
   else log.info(msg)
 })
 
 // Логирование ошибок прокси
 proxy.on('error', function (e, req, res) {
-  log.error(
-    format({
-      $name: routingRules[req?.headers?.host]?.name,
-      $ip: req?.headers?.['x-forwarded-for'],
-      $msg: e.message,
-      $method: req?.method,
-      $host: req?.headers?.host,
-      $url: req?.url,
-      $target: routingRules[req?.headers?.host]?.match(req)?.['target']
-    })
-  )
+  req.foramina.$statusMessage = e.message
+  log.error(format(req.foramina))
   if (res) {
     res.writeHead(444)
     res.end()
@@ -113,21 +101,11 @@ proxy.on('error', function (e, req, res) {
 })
 
 // Обработка входящих запросов
-const server = http.createServer((req, res) => {
-  req.foramina = {} // TODO
-  const opts = routingRules[req?.headers?.host]?.match(req)
+server.on('request', (req, res) => {
+  const opts = configureObj(req)
   if (opts) proxy.web(req, res, opts)
   else {
-    log.error(
-      format({
-        $name: routingRules[req?.headers?.host]?.name,
-        $ip: req?.headers?.['x-forwarded-for'],
-        $msg: 'MISSING',
-        $method: req?.method,
-        $host: req?.headers?.host,
-        $url: req?.url
-      })
-    )
+    log.error(format(req.foramina))
     res.writeHead(444)
     res.end()
   }
@@ -135,20 +113,12 @@ const server = http.createServer((req, res) => {
 
 // Поддержка протокола websocket
 server.on('upgrade', (req, socket, head) => {
-  const opts = routingRules[req?.headers?.host]?.match(req)
+  const opts = configureObj(req)
+  req.foramina.$statusMessage = 'UPGRADE'
   if (opts) {
-    log.info(
-      format({
-        $name: routingRules[req?.headers?.host]?.name,
-        $ip: req?.headers?.['x-forwarded-for'],
-        $msg: 'UPGRADE',
-        $method: req?.method,
-        $host: req?.headers?.host,
-        $url: req?.url
-      })
-    )
+    log.info(format(req.foramina))
     proxy.ws(req, socket, head, opts)
-  }
+  } else socket.destroy()
 })
 
 // Запуск приложения
@@ -193,7 +163,7 @@ server.on('upgrade', (req, socket, head) => {
 
 /**
  * Загрузка конфигурации
- * Если файл отсутствует используется example
+ * Если файл отсутствует используется default example
  * @returns {object}
  */
 function getConfig() {
@@ -207,6 +177,23 @@ function getConfig() {
   return YAML.parse(fs.readFileSync(cfg, 'utf8'))
 }
 
+function configureObj(req) {
+  const host = req.headers?.host
+  const url = req.url
+  const routingRule = routingRules[host]
+  const opts = routingRule?.match(req)
+  req.foramina = {
+    $name: routingRule?.name,
+    $ip: req.headers?.['x-forwarded-for'] || req.socket?.remoteAddress,
+    $statusCode: null,
+    $statusMessage: 'MISSING',
+    $method: req.method,
+    $forward: host ? new URL(url, `${req.headers?.['x-forwarded-proto'] || 'http'}://${host}`) : null,
+    $target: opts?.target ? new URL(req.url, opts.target) : null
+  }
+  return opts
+}
+
 /**
  * Форматирование строки журнала логирования
  * @param obj
@@ -214,13 +201,14 @@ function getConfig() {
  */
 function format(obj) {
   let str = logs.format
-  str = str.replace('$name', obj['$name'] || '-')
-  str = str.replace('$ip', obj['$ip'] || '-')
-  str = str.replace('$code', obj['$code'] || '-')
-  str = str.replace('$msg', obj['$msg'] || '-')
-  str = str.replace('$method', obj['$method'] || '-')
-  str = str.replace('$host', obj['$host'] || '-')
-  str = str.replace('$url', obj['$url'] || '/')
-  str = str.replace('$target', obj['$target'] || '-')
+  str = str.replace('$name', obj.$name || '-')
+  str = str.replace('$ip', obj.$ip || '-')
+  str = str.replace('$statusCode', obj.$statusCode || '-')
+  str = str.replace('$statusMessage', obj.$statusMessage || '-')
+  str = str.replace('$method', obj.$method || '-')
+  str = str.replace('$forward_href', obj.$forward?.href || '-')
+  str = str.replace('$forward_pathname', obj.$forward?.pathname || '-')
+  str = str.replace('$target_href', obj.$target?.href || '-')
+  str = str.replace('$target_pathname', obj.$target?.pathname || '-')
   return str
 }
