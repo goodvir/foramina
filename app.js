@@ -26,7 +26,7 @@ const YAML = require('yaml')
 // Проксирование запросов
 const {URL} = require('url')
 const http = require('http')
-const httpProxy = require('http-proxy')
+const {createProxyServer} = require('http-proxy')
 const HttpProxyRules = require('http-proxy-rules')
 
 // Работа с туннелями NGROK
@@ -78,7 +78,7 @@ const routingRules = {}
 const server = http.createServer()
 
 // Экземпляр прокси
-const proxy = new httpProxy['createProxyServer']()
+const proxy = createProxyServer()
 
 // Логирование запросов прокси
 proxy.on('proxyRes', function (proxyRes, req) {
@@ -142,8 +142,8 @@ server.on('upgrade', (req, socket, head) => {
     }
 
     // Привязка правил маршрутизации
-    if (route['forward'] === 'default') urls.forEach((url) => (routingRules[url.host] = routingRule))
-    else routingRules[route['forward']] = routingRule
+    if (typeof route['forward'] === 'string') route['forward'] = [route['forward']]
+    route['forward'].forEach((forward) => (routingRules[forward] = routingRule))
 
     // Запуск туннеля NGROK
     if (route['tunnel'] === true || (route['tunnel'] && route?.['tunnel']?.['active'] !== false)) {
@@ -192,7 +192,7 @@ function getConfig() {
 function configureObj(req) {
   const host = req.headers?.host
   const url = req.url
-  const routingRule = routingRules[host]
+  const routingRule = routingRules[host] || routingRules['any']
   const opts = routingRule?.match(req)
   req.foramina = {
     $name: routingRule?.name,
