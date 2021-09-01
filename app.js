@@ -24,6 +24,7 @@ const path = require('path')
 const YAML = require('yaml')
 
 // Проксирование запросов
+const net = require('net')
 const {URL} = require('url')
 const http = require('http')
 const {createProxyServer} = require('http-proxy')
@@ -34,6 +35,40 @@ const ngrok = require('ngrok')
 
 // Загрузка конфигурации
 const config = getConfig()
+
+// Формирование параметров сервера
+const listen = {
+  host: config['host'] === 'localhost' ? '127.0.0.1' : config['host'] || '127.0.0.1',
+  port: config['port'] || 3000,
+  urls: []
+}
+listen.urls = (() => {
+  const protocol = 'http'
+  const urls = []
+
+  switch (listen.host) {
+    case '127.0.0.1':
+      urls.push(new URL(`${protocol}://localhost:${listen.port}`))
+      urls.push(new URL(`${protocol}://127.0.0.1:${listen.port}`))
+      break
+    case '0.0.0.0':
+      urls.push(new URL(`${protocol}://localhost:${listen.port}`))
+      urls.push(new URL(`${protocol}://127.0.0.1:${listen.port}`))
+      try {
+        Object.entries(os.networkInterfaces()).forEach(([, interfaces]) => {
+          interfaces.forEach((face) => {
+            if ('IPv4' !== face.family || face.internal !== false) return
+            urls.push(new URL(`${protocol}://${face.address}:${listen.port}`))
+          })
+        })
+      } catch {}
+      break
+    default:
+      urls.push(new URL(`${protocol}://${listen.host}:${listen.port}`))
+  }
+
+  return urls
+})()
 
 // Настройка логирования
 const logs = {
@@ -101,33 +136,71 @@ proxy.on('error', function (e, req, res) {
   }
 })
 
-// Обработка входящих запросов
-server.on('request', (req, res) => {
-  const opts = configureObj(req)
-  if (opts) proxy.web(req, res, opts)
-  else {
-    log.error(format(req.foramina))
-    res.writeHead(444)
-    res.end()
-  }
+// Поддержка протокола HTTPS для обратного проксирования
+server.on('connect', (req, socket, head) => {
+  if (!config['reverse']) socket.end()
+
+  const host = req.url.split(':')[0]
+  const port = Number(req.url.split(':')?.[1] || 443)
+
+  log.info(
+    format({
+      $ip: req?.connection?.remoteAddress || req?.socket?.remoteAddress || req?.connection?.socket?.remoteAddress,
+      $statusMessage: 'PROXY',
+      $method: req.method,
+      $forward: new URL(`https://${host}`),
+      $target: new URL(`https://${host}`)
+    })
+  )
+
+  const proxySocket = new net.Socket()
+  proxySocket.connect(port, host, () => {
+    proxySocket.write(head)
+    socket.write(`HTTP/${req.httpVersion} 200 Connection established\r\n\r\n`)
+  })
+
+  proxySocket.on('data', (chunk) => socket.write(chunk))
+  proxySocket.on('end', () => socket.end())
+
+  proxySocket.on('error', () => {
+    socket.write(`HTTP/${req.httpVersion} 500 Connection error\r\n\r\n`)
+    socket.end()
+  })
+
+  socket.on('data', (chunk) => proxySocket.write(chunk))
+  socket.on('end', () => proxySocket.end())
+  socket.on('error', () => proxySocket.end())
 })
 
-// Поддержка протокола websocket
+// Поддержка протокола WEBSOCKET
 server.on('upgrade', (req, socket, head) => {
   const opts = configureObj(req)
   req.foramina.$statusMessage = 'UPGRADE'
   if (opts) {
     log.info(format(req.foramina))
     proxy.ws(req, socket, head, opts)
-  } else socket.destroy()
+  } else socket.end()
+})
+
+// Обработка входящих запросов
+server.on('request', (req, res) => {
+  const opts = configureObj(req)
+  if (opts) return proxy.web(req, res, opts)
+
+  if (config['reverse'] && !listen.urls.filter((e) => e.origin === req.foramina.$forward.origin).length) {
+    req.foramina.$target = req.foramina.$forward
+    return proxy.web(req, res, {target: req.foramina.$forward.href})
+  }
+
+  log.error(format(req.foramina))
+  res.writeHead(444)
+  res.end()
 })
 
 // Инициализация
 ;(async () => {
-  const [host, port, urls] = getListening(config['host'], config['port'])
-
   // Формирование правил маршрутизации
-  for (const route of config['routing']) {
+  for (const route of config['routing'] || []) {
     if (!route['active']) continue
 
     const routingRule = {
@@ -148,7 +221,7 @@ server.on('upgrade', (req, socket, head) => {
     // Запуск туннеля NGROK
     if (route['tunnel'] === true || (route['tunnel'] && route?.['tunnel']?.['active'] !== false)) {
       try {
-        const addr = `${host}:${port}`
+        const addr = `${listen.host}:${listen.port}`
         const cfg = Object.assign({}, config['ngrok'] || {}, route?.['tunnel']?.['opts'] || {}, {addr})
         const url = new URL(await ngrok['connect'](cfg))
         routingRules[url.host] = routingRule
@@ -164,8 +237,8 @@ server.on('upgrade', (req, socket, head) => {
   }
 
   // Запуск сервера
-  server.listen(port, host)
-  urls.forEach((url) => log.info(`Server listening at ${url.href}`))
+  server.listen(listen.port, listen.host)
+  listen.urls.forEach((url) => log.info(`Server listening at ${url.href}`))
 })()
 
 /**
@@ -205,7 +278,7 @@ function configureObj(req) {
     $statusMessage: 'MISSING',
     $method: req.method,
     $forward: host ? new URL(url, `${req.headers?.['x-forwarded-proto'] || 'http'}://${host}`) : null,
-    $target: opts?.target ? new URL(req.url, opts.target) : null
+    $target: opts?.target ? new URL(path.join(opts.target, req.url)) : null
   }
   return opts || null
 }
@@ -227,40 +300,4 @@ function format(obj) {
   str = str.replace('$target_href', obj.$target?.href || '-')
   str = str.replace('$target_pathname', obj.$target?.pathname || '-')
   return str
-}
-
-/**
- * Формирование URL сервера
- * @param host интерфейс, который будет прослушивать сервер
- * @param port порт, который будет прослушивать сервер
- * @returns {*[]}
- */
-function getListening(host, port) {
-  const protocol = 'http'
-  host = config['host'] === 'localhost' ? '127.0.0.1' : config['host'] || '127.0.0.1'
-  port = config['port'] || 3000
-
-  const urls = []
-  switch (host) {
-    case '127.0.0.1':
-      urls.push(new URL(`${protocol}://localhost:${port}`))
-      urls.push(new URL(`${protocol}://127.0.0.1:${port}`))
-      break
-    case '0.0.0.0':
-      urls.push(new URL(`${protocol}://localhost:${port}`))
-      urls.push(new URL(`${protocol}://127.0.0.1:${port}`))
-      try {
-        Object.entries(os.networkInterfaces()).forEach(([, interfaces]) => {
-          interfaces.forEach((face) => {
-            if ('IPv4' !== face.family || face.internal !== false) return
-            urls.push(new URL(`${protocol}://${face.address}:${port}`))
-          })
-        })
-      } catch {}
-      break
-    default:
-      urls.push(new URL(`${protocol}://${host}:${port}`))
-  }
-
-  return [host, port, urls]
 }
