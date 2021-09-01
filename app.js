@@ -27,6 +27,7 @@ const YAML = require('yaml')
 const net = require('net')
 const {URL} = require('url')
 const http = require('http')
+const https = require('https')
 const {createProxyServer} = require('http-proxy')
 const HttpProxyRules = require('http-proxy-rules')
 
@@ -40,31 +41,32 @@ const config = getConfig()
 const listen = {
   host: config['host'] === 'localhost' ? '127.0.0.1' : config['host'] || '127.0.0.1',
   port: config['port'] || 3000,
+  https: null,
   urls: []
 }
 listen.urls = (() => {
-  const protocol = 'http'
+  const proto = 'http'
   const urls = []
 
   switch (listen.host) {
     case '127.0.0.1':
-      urls.push(new URL(`${protocol}://localhost:${listen.port}`))
-      urls.push(new URL(`${protocol}://127.0.0.1:${listen.port}`))
+      urls.push(new URL(`${proto}://localhost:${listen.port}`))
+      urls.push(new URL(`${proto}://127.0.0.1:${listen.port}`))
       break
     case '0.0.0.0':
-      urls.push(new URL(`${protocol}://localhost:${listen.port}`))
-      urls.push(new URL(`${protocol}://127.0.0.1:${listen.port}`))
+      urls.push(new URL(`${proto}://localhost:${listen.port}`))
+      urls.push(new URL(`${proto}://127.0.0.1:${listen.port}`))
       try {
         Object.entries(os.networkInterfaces()).forEach(([, interfaces]) => {
           interfaces.forEach((face) => {
             if ('IPv4' !== face.family || face.internal !== false) return
-            urls.push(new URL(`${protocol}://${face.address}:${listen.port}`))
+            urls.push(new URL(`${proto}://${face.address}:${listen.port}`))
           })
         })
       } catch {}
       break
     default:
-      urls.push(new URL(`${protocol}://${listen.host}:${listen.port}`))
+      urls.push(new URL(`${proto}://${listen.host}:${listen.port}`))
   }
 
   return urls
@@ -110,13 +112,17 @@ const log = {
 const routingRules = {}
 
 // Экземпляр сервера
-const server = http.createServer()
+const httpServer = http.createServer()
+const httpsServer = https.createServer({
+  key: fs.readFileSync(path.join(__dirname, 'cert', 'key.pem')),
+  cert: fs.readFileSync(path.join(__dirname, 'cert', 'cert.pem'))
+})
 
 // Экземпляр прокси
 const proxy = createProxyServer()
 
 // Логирование запросов прокси
-proxy.on('proxyRes', function (proxyRes, req) {
+proxy.on('proxyRes', (proxyRes, req) => {
   req.foramina.$statusCode = proxyRes?.statusCode
   req.foramina.$statusMessage = proxyRes?.statusMessage
   const msg = format(req.foramina)
@@ -127,34 +133,39 @@ proxy.on('proxyRes', function (proxyRes, req) {
 })
 
 // Логирование ошибок прокси
-proxy.on('error', function (e, req, res) {
-  req.foramina.$statusMessage = e.message
-  log.error(format(req.foramina))
+proxy.on('error', (e, req, res) => {
   if (res) {
     res.writeHead(444)
     res.end()
   }
+  if (req) {
+    req.foramina.$statusMessage = e.message
+    log.error(format(req.foramina))
+  } else throw e
 })
 
-// Поддержка протокола HTTPS для обратного проксирования
-server.on('connect', (req, socket, head) => {
-  if (!config['reverse']) socket.end()
-
+// Поддержка протокола HTTPS
+httpServer.on('connect', (req, socket, head) => {
   const host = req.url.split(':')[0]
   const port = Number(req.url.split(':')?.[1] || 443)
 
-  log.info(
-    format({
-      $ip: req?.connection?.remoteAddress || req?.socket?.remoteAddress || req?.connection?.socket?.remoteAddress,
-      $statusMessage: 'PROXY',
-      $method: req.method,
-      $forward: new URL(`https://${host}`),
-      $target: new URL(`https://${host}`)
-    })
-  )
+  const routingRule = routingRules[host] || routingRules['any']
+  if (!routingRule && !config['reverse']) socket.end()
+
+  if (!routingRule) {
+    log.info(
+      format({
+        $ip: req?.connection?.remoteAddress || req?.socket?.remoteAddress || req?.connection?.socket?.remoteAddress,
+        $statusMessage: 'PROXY',
+        $method: req.method,
+        $forward: new URL(`https://${host}`),
+        $target: new URL(`https://${host}`)
+      })
+    )
+  }
 
   const proxySocket = new net.Socket()
-  proxySocket.connect(port, host, () => {
+  proxySocket.connect(routingRule ? listen.https : port, routingRule ? '127.0.0.1' : host, () => {
     proxySocket.write(head)
     socket.write(`HTTP/${req.httpVersion} 200 Connection established\r\n\r\n`)
   })
@@ -173,17 +184,20 @@ server.on('connect', (req, socket, head) => {
 })
 
 // Поддержка протокола WEBSOCKET
-server.on('upgrade', (req, socket, head) => {
+const onUpgrade = (req, socket, head) => {
   const opts = configureObj(req)
   req.foramina.$statusMessage = 'UPGRADE'
   if (opts) {
     log.info(format(req.foramina))
     proxy.ws(req, socket, head, opts)
   } else socket.end()
-})
+}
+
+httpServer.on('upgrade', onUpgrade)
+httpsServer.on('upgrade', onUpgrade)
 
 // Обработка входящих запросов
-server.on('request', (req, res) => {
+const onRequest = (req, res) => {
   const opts = configureObj(req)
   if (opts) return proxy.web(req, res, opts)
 
@@ -195,7 +209,10 @@ server.on('request', (req, res) => {
   log.error(format(req.foramina))
   res.writeHead(444)
   res.end()
-})
+}
+
+httpServer.on('request', onRequest)
+httpsServer.on('request', onRequest)
 
 // Инициализация
 ;(async () => {
@@ -224,7 +241,7 @@ server.on('request', (req, res) => {
         const addr = `${listen.host}:${listen.port}`
         const cfg = Object.assign({}, config['ngrok'] || {}, route?.['tunnel']?.['opts'] || {}, {addr})
         const url = new URL(await ngrok['connect'](cfg))
-        routingRules[url.host] = routingRule
+        routingRules[url.hostname] = routingRule
         log.info(`Created tunnel ${route['name'] || '-'} ${url.href}`)
       } catch (e) {
         let details
@@ -237,8 +254,24 @@ server.on('request', (req, res) => {
   }
 
   // Запуск сервера
-  server.listen(listen.port, listen.host)
-  listen.urls.forEach((url) => log.info(`Server listening at ${url.href}`))
+  let httpsServerRunCount = 10
+  const port = () => Math.floor(Math.random() * (55000 - 50000)) + 50000
+  httpsServer.listen(port(), '127.0.0.1')
+  httpsServer.on('error', (e) => {
+    if (e && (e?.code !== 'EADDRINUSE' || httpsServerRunCount < 1)) throw e
+    log.warn('Server https port in use, retrying...')
+    httpsServerRunCount--
+    httpsServer.close()
+    httpsServer.listen(port(), '127.0.0.1')
+  })
+
+  httpsServer.on('listening', () => {
+    listen.https = httpsServer.address()?.['port']
+    httpServer.listen(listen.port, listen.host)
+  })
+  httpServer.on('listening', () => {
+    listen.urls.forEach((url) => log.info(`Server listening at ${url.href}`))
+  })
 })()
 
 /**
@@ -263,10 +296,17 @@ function getConfig() {
  * @returns {object|null}
  */
 function configureObj(req) {
-  const host = req.headers?.host
-  const url = req.url
-  const routingRule = routingRules[host] || routingRules['any']
+  let forward
+  try {
+    forward = new URL(req.url)
+  } catch {
+    forward = new URL(`${req.connection.encrypted ? 'https' : 'http'}://${path.join(req.headers?.host, req.url)}`)
+  }
+  req.url = req.url.replace(forward.origin, '')
+
+  const routingRule = routingRules[forward?.hostname] || routingRules['any']
   const opts = routingRule?.match(req)
+
   req.foramina = {
     $name: routingRule?.name,
     $ip:
@@ -277,7 +317,7 @@ function configureObj(req) {
     $statusCode: null,
     $statusMessage: 'MISSING',
     $method: req.method,
-    $forward: host ? new URL(url, `${req.headers?.['x-forwarded-proto'] || 'http'}://${host}`) : null,
+    $forward: forward,
     $target: opts?.target ? new URL(path.join(opts.target, req.url)) : null
   }
   return opts || null
