@@ -18,7 +18,6 @@ process.on('uncaughtException', (err) => {
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
-// TODO const {tmpdir} = require('os')
 
 // Парсинг файла конфигурации
 const YAML = require('yaml')
@@ -216,6 +215,9 @@ httpsServer.on('request', onRequest)
 
 // Инициализация
 ;(async () => {
+  // Индикатор загрузки бинарных файлов NGROK
+  let loadingBinFile = false
+
   // Формирование правил маршрутизации
   for (const route of config['routing'] || []) {
     if (!route['active']) continue
@@ -237,10 +239,24 @@ httpsServer.on('request', onRequest)
 
     // Запуск туннеля NGROK
     if (route['tunnel'] === true || (route['tunnel'] && route?.['tunnel']?.['active'] !== false)) {
+      const copyBinPath = './bin'
+      const ngrokBinPath = path.join(__dirname, 'node_modules', 'ngrok', 'bin')
+      const getBinPath = () => (process['pkg'] ? copyBinPath : ngrokBinPath)
+
+      // Управление бинарными файлами NGROK
+      if (process['pkg'] && !loadingBinFile) {
+        await fs.promises.mkdir(copyBinPath, {recursive: true})
+        fs.readdirSync(ngrokBinPath).forEach((file) => {
+          fs.writeFileSync(path.join(copyBinPath, file), fs.readFileSync(path.join(ngrokBinPath, file)))
+        })
+        loadingBinFile = true
+      }
+
+      // Формирование настроек туннеля
       try {
         const addr = `${listen.host}:${listen.port}`
         const cfg = Object.assign({}, config['ngrok'] || {}, route?.['tunnel']?.['opts'] || {}, {addr})
-        const url = new URL(await ngrok['connect'](cfg))
+        const url = new URL(await ngrok['connect']({binPath: getBinPath, ...cfg}))
         routingRules[url.hostname] = routingRule
         log.info(`Created tunnel ${route['name'] || '-'} ${url.href}`)
       } catch (e) {
@@ -258,7 +274,7 @@ httpsServer.on('request', onRequest)
   const port = () => Math.floor(Math.random() * (55000 - 50000)) + 50000
   httpsServer.listen(port(), '127.0.0.1')
   httpsServer.on('error', (e) => {
-    if (e && (e?.code !== 'EADDRINUSE' || httpsServerRunCount < 1)) throw e
+    if (e && httpsServerRunCount < 1) throw e
     log.warn('Server https port in use, retrying...')
     httpsServerRunCount--
     httpsServer.close()
