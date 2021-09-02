@@ -231,7 +231,25 @@ routing:
 
 ## Логирование
 
-TODO
+Для всех запросов `foramina` формирует запись, которая согласно шаблону строки журнала выводится в консоль, шаблоном
+можно управлять через [параметры конфигурации](#поддерживаемые-параметры), так же можно включить дублирования журнала
+логирования в файл _./foramina.log_
+
+Формат строки журнала поддерживает следующие литералы:
+
+- `$name` - псевдоним настроек
+- `$ip` - IP источника запроса
+- `$statusCode` - HTTP код ответа
+- `$statusMessage` - краткая информация о статусе запроса
+- `$method` - HTTP метод запроса
+- `$forward_href` - источник запроса, [подробнее](https://url.spec.whatwg.org/#api)
+- `$forward_origin` - источник запроса, [подробнее](https://url.spec.whatwg.org/#api)
+- `$forward_host` - источник запроса, [подробнее](https://url.spec.whatwg.org/#api)
+- `$forward_pathname` - источник запроса, [подробнее](https://url.spec.whatwg.org/#api)
+- `$target_href` - перенаправления запроса, [подробнее](https://url.spec.whatwg.org/#api)
+- `$target_origin` - перенаправления запроса, [подробнее](https://url.spec.whatwg.org/#api)
+- `$target_host` - перенаправления запроса, [подробнее](https://url.spec.whatwg.org/#api)
+- `$target_pathname` - перенаправления запроса, [подробнее](https://url.spec.whatwg.org/#api)
 
 ## Исполняемые файлы
 

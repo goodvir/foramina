@@ -335,9 +335,15 @@ function format(obj) {
   str = str.replace('$statusCode', obj.$statusCode || '-')
   str = str.replace('$statusMessage', obj.$statusMessage || '-')
   str = str.replace('$method', obj.$method || '-')
+
   str = str.replace('$forward_href', obj.$forward?.href || '-')
+  str = str.replace('$forward_origin', obj.$forward?.origin || '-')
+  str = str.replace('$forward_host', obj.$forward?.host || '-')
   str = str.replace('$forward_pathname', obj.$forward?.pathname || '-')
+
   str = str.replace('$target_href', obj.$target?.href || '-')
+  str = str.replace('$target_origin', obj.$target?.origin || '-')
+  str = str.replace('$target_host', obj.$target?.host || '-')
   str = str.replace('$target_pathname', obj.$target?.pathname || '-')
   return str
 }
