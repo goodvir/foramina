@@ -1,5 +1,3 @@
-<!--suppress ALL -->
-
 # FORAMINA
 
 ## Когда нужно прокинуть ваш сервис в интернет
@@ -108,7 +106,7 @@ proxy:
 routing:
   - active: true
     name: DEFAULT
-    forward: any
+    forward: any # Применять правило для всех запросов
     target:
       default: http://127.0.0.1:8080
       rules:
@@ -149,15 +147,89 @@ DEFAULT 192.168.155.209 200 OK GET http://192.168.155.209:9000/favicon.ico http:
 Необходимо настроить [параметры соединения браузера](https://support.mozilla.org/ru/kb/parametry-soedineniya-v-firefox)
 на работу с прокси сервером:
 
-<p>
-<img src="docs/firefox.jpg" width="500" height="auto" alt="firefox preferences">
-</p>
+![Параметры соединения Firefox](docs/firefox.jpg)
 
 ```yaml
-TODO
+reverse: true # Режим обратного прокси
+proxy:
+  ws: true
+  xfwd: false
+  secure: false
+  changeOrigin: true
+  autoRewrite: true
+ngrok:
+  region: us
+routing:
+  # Перенаправить запросы ya.ru 
+  - active: true
+    name: YANDEX
+    forward: ya.ru
+    target:
+      default: https://httpbin.org
+      rules:
+        "/search/(.+)": https://httpbin.org/anything/files?search=$1
+  # Перенаправить запросы my-app.ru и создать туннель ngrok
+  - active: true
+    name: MY-APP
+    forward: my-app.ru
+    target: http://127.0.0.1:8080
+    tunnel: true
 ```
 
-### Логирование
+```text
+Created tunnel MY-APP https://33ab3dd28e0c.ngrok.io/
+Server listening at http://localhost:3000/
+Server listening at http://127.0.0.1:3000/
+YANDEX 127.0.0.1 200 OK GET http://ya.ru/ https://httpbin.org/
+YANDEX 127.0.0.1 200 OK GET http://ya.ru/flasgger_static/swagger-ui-bundle.js https://httpbin.org/flasgger_static/swagger-ui-bundle.js
+YANDEX 127.0.0.1 200 OK GET http://ya.ru/flasgger_static/swagger-ui-standalone-preset.js https://httpbin.org/flasgger_static/swagger-ui-standalone-preset.js
+YANDEX 127.0.0.1 200 OK GET http://ya.ru/flasgger_static/lib/jquery.min.js https://httpbin.org/flasgger_static/lib/jquery.min.js
+YANDEX 127.0.0.1 200 OK GET http://ya.ru/flasgger_static/swagger-ui.css https://httpbin.org/flasgger_static/swagger-ui.css
+YANDEX 127.0.0.1 200 OK GET http://ya.ru/static/favicon.ico https://httpbin.org/static/favicon.ico
+YANDEX 127.0.0.1 200 OK GET http://ya.ru/spec.json https://httpbin.org/spec.json
+YANDEX 127.0.0.1 200 OK GET http://ya.ru/search/test https://httpbin.org/anything/files?search=test
+MY-APP 127.0.0.1 200 OK GET http://my-app.ru/ http://127.0.0.1:8080/
+MY-APP 127.0.0.1 200 OK GET http://my-app.ru/favicon.ico http://127.0.0.1:8080/favicon.ico
+- 127.0.0.1 - PROXY CONNECT https://www.google.com/ https://www.google.com/
+- 127.0.0.1 - PROXY CONNECT https://github.com/ https://github.com/
+- 127.0.0.1 - PROXY CONNECT https://github.githubassets.com/ https://github.githubassets.com/
+- 127.0.0.1 - PROXY CONNECT https://alive.github.com/ https://alive.github.com/
+MY-APP 127.0.0.1 200 OK GET https://33ab3dd28e0c.ngrok.io/ http://127.0.0.1:8080/
+MY-APP 127.0.0.1 200 OK GET https://33ab3dd28e0c.ngrok.io/favicon.ico http://127.0.0.1:8080/favicon.ico
+```
+
+**Генерируемый шаблон настроек при отсутствии пользовательской конфигурации**
+
+```yaml
+host: 127.0.0.1
+port: 3000
+revers: false
+logs:
+  format: '$name $ip $statusCode $statusMessage $method $forward_href $target_href'
+  file: false
+proxy:
+  ws: true
+  xfwd: false
+  secure: false
+  changeOrigin: true
+  autoRewrite: true
+ngrok:
+  authtoken:
+  region: us
+routing:
+  - active: true
+    name: DEFAULT
+    opts:
+    forward: any
+    target:
+      default: https://httpbin.org
+      rules:
+    tunnel:
+      active: false
+      opts:
+```
+
+## Логирование
 
 TODO
 
