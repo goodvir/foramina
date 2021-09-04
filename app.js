@@ -1,17 +1,40 @@
 'use strict'
 
-// Интерфейс ввода
-const readline = require('readline')
-const readlineInterface = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-})
+// Параметры логирования
+const logs = {
+  format: '$name $ip $statusCode $statusMessage $method $forward_href $target_href',
+  file: false
+}
+
+// Методы логирования
+const dt = () => new Date().toLocaleDateString()
+const tt = () => new Date().toLocaleTimeString()
+const log = {
+  file(msg) {
+    if (logs.file) fs.appendFileSync(logs.file, `[${dt()} ${tt()}] ${msg}\n`, 'utf8')
+  },
+  trace(msg) {
+    this.file(msg)
+    console.log('\x1b[90m[%s %s] \x1b[90m%s\x1b[0m', dt(), tt(), msg)
+  },
+  info(msg) {
+    this.file(msg)
+    console.log('\x1b[90m[%s %s] \x1b[32m%s\x1b[0m', dt(), tt(), msg)
+  },
+  warn(msg) {
+    this.file(msg)
+    console.log('\x1b[90m[%s %s] \x1b[93m%s\x1b[0m', dt(), tt(), msg)
+  },
+  error(msg) {
+    this.file(msg)
+    console.log('\x1b[90m[%s %s] \x1b[31m%s\x1b[0m', dt(), tt(), msg)
+  }
+}
 
 // Необработанные ошибки
-process.on('uncaughtException', (err) => {
-  console.error(err)
-  if (process['pkg']) readlineInterface.on('line', () => process.exit(1))
-  else process.exit(1)
+process.on('uncaughtException', (e) => {
+  log.error(e)
+  process.exit(1)
 })
 
 // Работа c системой
@@ -72,39 +95,11 @@ listen.urls = (() => {
 })()
 
 // Настройка логирования
-const logs = {
-  format: '$name $ip $statusCode $statusMessage $method $forward_href $target_href',
-  file: false
-}
 if (typeof config['logs'] === 'string') logs.format = config['logs']
 if (config?.['logs']?.['format']) logs.format = config['logs']['format']
 if (config?.['logs']?.['file']) {
   logs.file = `./foramina.log`
   fs.appendFileSync(logs.file, `Run script ${new Date().toISOString()}\n`, 'utf8')
-}
-
-const dt = () => new Date().toLocaleDateString()
-const tt = () => new Date().toLocaleTimeString()
-const log = {
-  file(msg) {
-    if (logs.file) fs.appendFileSync(logs.file, `[${dt()} ${tt()}] ${msg}\n`, 'utf8')
-  },
-  trace(msg) {
-    this.file(msg)
-    console.log('\x1b[90m[%s %s] \x1b[90m%s\x1b[0m', dt(), tt(), msg)
-  },
-  info(msg) {
-    this.file(msg)
-    console.log('\x1b[90m[%s %s] \x1b[32m%s\x1b[0m', dt(), tt(), msg)
-  },
-  warn(msg) {
-    this.file(msg)
-    console.log('\x1b[90m[%s %s] \x1b[93m%s\x1b[0m', dt(), tt(), msg)
-  },
-  error(msg) {
-    this.file(msg)
-    console.log('\x1b[90m[%s %s] \x1b[31m%s\x1b[0m', dt(), tt(), msg)
-  }
 }
 
 // Правила маршрутизации
@@ -149,37 +144,43 @@ httpServer.on('connect', (req, socket, head) => {
   const port = Number(req.url.split(':')?.[1] || 443)
 
   const routingRule = routingRules[host] || routingRules['any']
-  if (!routingRule && !config['reverse']) socket.end()
+  if (!routingRule && !config['revers']) socket.end()
+  else {
+    if (!routingRule) {
+      log.info(
+        format({
+          $ip: req?.connection?.remoteAddress || req?.socket?.remoteAddress || req?.connection?.socket?.remoteAddress,
+          $statusMessage: 'PROXY',
+          $method: req.method,
+          $forward: new URL(`https://${host}`),
+          $target: new URL(`https://${host}`)
+        })
+      )
+    }
 
-  if (!routingRule) {
-    log.info(
-      format({
-        $ip: req?.connection?.remoteAddress || req?.socket?.remoteAddress || req?.connection?.socket?.remoteAddress,
-        $statusMessage: 'PROXY',
-        $method: req.method,
-        $forward: new URL(`https://${host}`),
-        $target: new URL(`https://${host}`)
-      })
-    )
+    const proxySocket = new net.Socket()
+    proxySocket.connect(routingRule ? listen.https : port, routingRule ? '127.0.0.1' : host, () => {
+      proxySocket.write(head)
+      socket.write(`HTTP/${req.httpVersion} 200 Connection established\r\n\r\n`)
+    })
+
+    proxySocket.on('data', (chunk) => socket.write(chunk))
+    proxySocket.on('end', () => socket.end())
+
+    proxySocket.on('error', (e) => {
+      log.error(e)
+      socket.write(`HTTP/${req.httpVersion} 500 Connection error\r\n\r\n`)
+      socket.end()
+    })
+
+    socket.on('data', (chunk) => proxySocket.write(chunk))
+    socket.on('end', () => proxySocket.end())
+
+    socket.on('error', (e) => {
+      log.error('  > ERR: %s', e)
+      proxySocket.end()
+    })
   }
-
-  const proxySocket = new net.Socket()
-  proxySocket.connect(routingRule ? listen.https : port, routingRule ? '127.0.0.1' : host, () => {
-    proxySocket.write(head)
-    socket.write(`HTTP/${req.httpVersion} 200 Connection established\r\n\r\n`)
-  })
-
-  proxySocket.on('data', (chunk) => socket.write(chunk))
-  proxySocket.on('end', () => socket.end())
-
-  proxySocket.on('error', () => {
-    socket.write(`HTTP/${req.httpVersion} 500 Connection error\r\n\r\n`)
-    socket.end()
-  })
-
-  socket.on('data', (chunk) => proxySocket.write(chunk))
-  socket.on('end', () => proxySocket.end())
-  socket.on('error', () => proxySocket.end())
 })
 
 // Поддержка протокола WEBSOCKET
@@ -200,7 +201,7 @@ const onRequest = (req, res) => {
   const opts = configureObj(req)
   if (opts) return proxy.web(req, res, opts)
 
-  if (config['reverse'] && !listen.urls.filter((e) => e.origin === req.foramina.$forward.origin).length) {
+  if (config['revers'] && !listen.urls.filter((e) => e.origin === req.foramina.$forward.origin).length) {
     req.foramina.$target = req.foramina.$forward
     return proxy.web(req, res, {target: req.foramina.$forward.href})
   }

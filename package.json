@@ -8,6 +8,7 @@
     "start": "node app.js",
     "build": "pkg --compress GZip package.json",
     "buildDebug": "pkg --debug package.json",
+    "pushTags": "git push --tags",
     "updatePackages": "ncu -u"
   },
   "keywords": [

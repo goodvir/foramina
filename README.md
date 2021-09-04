@@ -155,7 +155,7 @@ DEFAULT 192.168.155.209 200 OK GET http://192.168.155.209:9000/favicon.ico http:
 ![Параметры соединения Firefox](docs/firefox.jpg)
 
 ```yaml
-reverse: true # Режим обратного прокси
+revers: true # Режим обратного прокси
 proxy:
   ws: true
   xfwd: false
