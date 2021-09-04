@@ -258,9 +258,9 @@ routing:
 
 ## Исполняемые файлы
 
-- `foramina-macos` - MacOS-x64
-- `foramina-linux` - Linux-x64
-- `foramina-win.exe` - Windows-x64
+- `foramina-macos` - node16-macos-x64
+- `foramina-linux` - node16-linux-x64
+- `foramina-win.exe` - node16-win-x64
 
 ## Как это работает?
 

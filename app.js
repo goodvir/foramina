@@ -177,7 +177,7 @@ httpServer.on('connect', (req, socket, head) => {
     socket.on('end', () => proxySocket.end())
 
     socket.on('error', (e) => {
-      log.error('  > ERR: %s', e)
+      log.error(e)
       proxySocket.end()
     })
   }
